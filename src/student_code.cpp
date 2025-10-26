@@ -281,93 +281,6 @@ VertexIter HalfedgeMesh::splitEdge(EdgeIter e0) {
   return v;
 }
 
-std::vector<VertexIter> getNeighbors(VertexIter v) {
-  std::vector<VertexIter> neighbors;
-
-  // 获取与当前顶点相邻的所有顶点
-  HalfedgeIter he = v->halfedge();
-
-  do {
-    // 获取与当前半边相关的相邻顶点
-    VertexIter neighbor = he->vertex();
-
-    // 只将原始顶点作为邻居返回
-    if (!neighbor->isNew) {
-      neighbors.push_back(neighbor);
-    }
-
-    // 移动到下一个相邻半边
-    he = he->next();
-  } while (he != v->halfedge()); // 遍历到原始顶点时停止
-
-  return neighbors;
-}
-
-Vector3D computeOldVertexPosition(VertexIter v) {
-  // 获取该顶点的邻居
-  std::vector<VertexIter> neighbors = getNeighbors(v);
-
-  // 计算邻接顶点的位置总和
-  Vector3D sumOfNeighbors = Vector3D(0, 0, 0);
-  for (VertexIter neighbor : neighbors) {
-    sumOfNeighbors += neighbor->position;
-  }
-
-  // 计算该顶点的度数
-  int n = neighbors.size();
-
-  // 边缘顶点和非边缘顶点的不同处理
-  double u;
-  if (n == 3) {
-    // 边缘顶点的权重因子
-    u = 1.0 / 8.0;
-  } else {
-    // 非边缘顶点的权重因子
-    u = 1.0 / (4.0 * n);
-  }
-
-  // 更新顶点位置
-  Vector3D newPosition = (1.0 - n * u) * v->position + u * sumOfNeighbors;
-
-  return newPosition;
-}
-
-// 计算新顶点的位置，基于4-1细分规则
-Vector3D computeNewVertexPosition(VertexIter v) {
-  // 获取该顶点的邻居
-  std::vector<VertexIter> neighbors = getNeighbors(v);
-
-  // 处理顶点的邻居数量
-  int n = neighbors.size();
-
-  Vector3D newPosition = Vector3D(0, 0, 0);
-
-  if (n == 4) {
-    // 对于四边形面，按照4-1细分规则
-    Vector3D A = neighbors[0]->position;
-    Vector3D B = neighbors[1]->position;
-    Vector3D C = neighbors[2]->position;
-    Vector3D D = neighbors[3]->position;
-
-    // 计算新位置
-    newPosition = (3.0 / 8.0) * (A + B) + (1.0 / 8.0) * (C + D);
-  } else if (n == 3) {
-    // 对于三角形面，使用更简单的平均法
-    for (VertexIter neighbor : neighbors) {
-      newPosition += neighbor->position;
-    }
-    newPosition /= 3.0;
-  } else {
-    // 对于其他情况（如n > 4），可以使用默认的平均值法
-    for (VertexIter neighbor : neighbors) {
-      newPosition += neighbor->position;
-    }
-    newPosition /= n; // 计算平均位置
-  }
-
-  return newPosition;
-}
-
 void MeshResampler::upsample(HalfedgeMesh &mesh) {
   // TODO Part 6.
   // This routine should increase the number of triangles in the mesh using
@@ -396,11 +309,8 @@ void MeshResampler::upsample(HalfedgeMesh &mesh) {
   // Iterate over all edges in the mesh to split them.
 
   for (EdgeIter e = mesh.edgesBegin(); e != mesh.edgesEnd(); e++) {
-    // 标记原有的边为旧边
     e->isNew = 0;
 
-    // 获取边的信息
-    // 内部的半边
     HalfedgeIter h0 = e->halfedge();
     HalfedgeIter h1 = h0->next();
     HalfedgeIter h2 = h1->next();
@@ -408,57 +318,46 @@ void MeshResampler::upsample(HalfedgeMesh &mesh) {
     HalfedgeIter h4 = h3->next();
     HalfedgeIter h5 = h4->next();
 
-    // 顶点
     VertexIter B = h0->vertex();
     VertexIter C = h3->vertex();
     VertexIter A = h2->vertex();
     VertexIter D = h5->vertex();
 
-    // 新顶点的位置
-    // 预先计算并将新顶点的位置存储在旧边的 newPosition 字段中
     e->newPosition = 3.0 / 8.0 * (B->position + C->position) +
                      1.0 / 8.0 * (A->position + D->position);
   }
 
-  // 计算新的顶点位置
   for (VertexIter v = mesh.verticesBegin(); v != mesh.verticesEnd(); v++) {
-    // 标记原有的顶点为旧顶点
     v->isNew = 0;
 
-    // 将旧顶点的新位置设置为其周围旧顶点的加权组合
     HalfedgeIter h = v->halfedge();
-    Vector3D original_neighbor_position_sum(0, 0, 0);
+    Vector3D adjacentSum(0, 0, 0);
     do {
-      original_neighbor_position_sum += h->twin()->vertex()->position;
+      adjacentSum += h->twin()->vertex()->position;
       h = h->twin()->next();
     } while (h != v->halfedge());
     float n = (float)v->degree();
     float u = (n == 3.0) ? (3.0 / 16.0) : (3.0 / (8.0 * n));
-    v->newPosition =
-        (1.0 - n * u) * v->position + u * original_neighbor_position_sum;
+    v->newPosition = (1.0 - n * u) * v->position + u * adjacentSum;
   }
 
-  // 分割所有旧边
   for (EdgeIter e = mesh.edgesBegin(); e != mesh.edgesEnd(); e++) {
     VertexIter B = e->halfedge()->vertex();
     VertexIter C = e->halfedge()->twin()->vertex();
 
-    // 当它是旧边时分割
-    if (!(B->isNew || C->isNew)) {
+    if (!B->isNew && !C->isNew) {
       VertexIter E = mesh.splitEdge(e);
       E->newPosition = e->newPosition;
     }
   }
-  // 翻转连接一个旧顶点和一个新顶点的新边，优化网格拓扑结构
   for (EdgeIter e = mesh.edgesBegin(); e != mesh.edgesEnd(); e++) {
     VertexIter v0 = e->halfedge()->vertex();
     VertexIter v1 = e->halfedge()->twin()->vertex();
-    if (e->isNew && (v0->isNew + v1->isNew == 1)) {
+    if (e->isNew && v0->isNew != v1->isNew) {
       mesh.flipEdge(e);
     }
   }
 
-  // 更新所有顶点的位置
   for (VertexIter v = mesh.verticesBegin(); v != mesh.verticesEnd(); v++) {
     v->position = v->newPosition;
     v->isNew = 0;
